@@ -296,14 +296,31 @@ jobs:
           sed -i 's#<application#<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n    <application#' android/app/src/main/AndroidManifest.xml
           npx cap sync android
 
-      - name: Icône de l'application
-        continue-on-error: true
+      - name: Logo M de l'application
         run: |
-          mkdir -p assets
+          curl -fsSL https://moubarak-khelcom.netlify.app/icon-maskable-512.png -o /tmp/i.png || curl -fsSL https://moubarak-khelcom.netlify.app/icon-512.png -o /tmp/i.png
           pip install pillow
-          curl -fsSL https://moubarak-khelcom.netlify.app/icon-512.png -o /tmp/i.png
-          python -c "from PIL import Image; Image.open('/tmp/i.png').convert('RGBA').resize((1024,1024)).save('assets/icon-only.png')"
-          npx capacitor-assets generate --android
+          python3 - <<'PYEOF'
+          from PIL import Image
+          import os
+          src=Image.open('/tmp/i.png').convert('RGBA')
+          col='#%02x%02x%02x'%src.getpixel((4,4))[:3]
+          R='android/app/src/main/res'
+          for d,l,f in [('mdpi',48,108),('hdpi',72,162),('xhdpi',96,216),('xxhdpi',144,324),('xxxhdpi',192,432)]:
+              p=os.path.join(R,'mipmap-'+d)
+              os.makedirs(p,exist_ok=True)
+              a=src.resize((l,l),Image.LANCZOS)
+              a.save(p+'/ic_launcher.png')
+              a.save(p+'/ic_launcher_round.png')
+              c=Image.new('RGBA',(f,f),(0,0,0,0))
+              k=int(f*0.78)
+              c.paste(src.resize((k,k),Image.LANCZOS),((f-k)//2,(f-k)//2))
+              c.save(p+'/ic_launcher_foreground.png')
+          v=os.path.join(R,'values')
+          os.makedirs(v,exist_ok=True)
+          open(v+'/ic_launcher_background.xml','w').write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n  <color name="ic_launcher_background">'+col+'</color>\n</resources>\n')
+          print('logo ok',col)
+          PYEOF
 
       - name: Fabriquer l'APK
         working-directory: android
@@ -316,4 +333,4 @@ jobs:
         with:
           tag_name: apk-${{ github.run_number }}
           name: Moubarak APK ${{ github.run_number }}
-          files: android/**/*.apk
+          files: android/**/*.apk￼Enter
