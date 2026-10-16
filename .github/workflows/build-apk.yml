@@ -1,0 +1,118 @@
+# Fabrique l'application Android MOUBARAK (APK) automatiquement.
+# Mode d'emploi : crée ce fichier dans ton dépôt GitHub sous le nom
+#   .github/workflows/build-apk.yml
+# puis attends la fin de l'onglet Actions : l'APK apparaît dans « Releases ».
+name: Build Moubarak APK
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Écrire les fichiers du projet
+        run: |
+          mkdir -p "$(dirname package.json)"
+          cat > package.json <<'MKEOF'
+          {
+            "name": "moubarak-android",
+            "private": true,
+            "version": "1.0.0",
+            "dependencies": {
+              "@capacitor/android": "^7.0.0",
+              "@capacitor/core": "^7.0.0"
+            },
+            "devDependencies": {
+              "@capacitor/assets": "^3.0.5",
+              "@capacitor/cli": "^7.0.0"
+            }
+          }
+          MKEOF
+          mkdir -p "$(dirname capacitor.config.json)"
+          cat > capacitor.config.json <<'MKEOF'
+          {
+            "appId": "com.khelcom.moubarak",
+            "appName": "Moubarak",
+            "webDir": "www",
+            "server": {
+              "url": "https://moubarak-khelcom.netlify.app",
+              "cleartext": false
+            }
+          }
+          MKEOF
+          mkdir -p "$(dirname www/index.html)"
+          cat > www/index.html <<'MKEOF'
+          <!doctype html><html><head><meta charset="utf-8"><title>Moubarak</title></head><body>Moubarak</body></html>
+          MKEOF
+          mkdir -p "$(dirname native/MoubarakStoragePlugin.java)"
+          cat > native/MoubarakStoragePlugin.java <<'MKEOF'
+          package com.khelcom.moubarak;
+
+          import android.Manifest;
+          import android.content.ContentResolver;
+          import android.content.ContentValues;
+          import android.media.MediaScannerConnection;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Environment;
+          import android.provider.MediaStore;
+          import android.util.Base64;
+
+          import com.getcapacitor.JSObject;
+          import com.getcapacitor.PermissionState;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+          import com.getcapacitor.annotation.Permission;
+          import com.getcapacitor.annotation.PermissionCallback;
+
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.io.OutputStream;
+          import java.util.HashMap;
+          import java.util.Map;
+          import java.util.UUID;
+
+          /**
+           * Enregistre les images, vidéos et fichiers de MOUBARAK dans des dossiers visibles :
+           *  - images  : Pictures/Moubarak Images  (galerie)
+           *  - vidéos  : Movies/Moubarak Videos    (galerie)
+           *  - autres  : Documents/Moubarak        (Mes fichiers)
+           */
+          @CapacitorPlugin(
+              name = "MoubarakStorage",
+              permissions = {
+                  @Permission(alias = "storage", strings = { Manifest.permission.WRITE_EXTERNAL_STORAGE })
+              }
+          )
+          public class MoubarakStoragePlugin extends Plugin {
+
+              private static class Sink {
+                  OutputStream os;
+                  Uri uri;
+                  File file;
+                  String kind;
+              }
+
+              private final Map<String, Sink> sinks = new HashMap<>();
+
+              private st
