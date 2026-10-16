@@ -1,7 +1,5 @@
 # Fabrique l'application Android MOUBARAK (APK) automatiquement.
-# Mode d'emploi : crée ce fichier dans ton dépôt GitHub sous le nom
-#   .github/workflows/build-apk.yml
-# puis attends la fin de l'onglet Actions : l'APK apparaît dans « Releases ».
+# L'APK apparait dans l'onglet « Releases » a la fin du build.
 name: Build Moubarak APK
 
 on:
@@ -30,7 +28,6 @@ jobs:
 
       - name: Écrire les fichiers du projet
         run: |
-          mkdir -p "$(dirname package.json)"
           cat > package.json <<'MKEOF'
           {
             "name": "moubarak-android",
@@ -46,7 +43,6 @@ jobs:
             }
           }
           MKEOF
-          mkdir -p "$(dirname capacitor.config.json)"
           cat > capacitor.config.json <<'MKEOF'
           {
             "appId": "com.khelcom.moubarak",
@@ -58,11 +54,10 @@ jobs:
             }
           }
           MKEOF
-          mkdir -p "$(dirname www/index.html)"
+          mkdir -p www native
           cat > www/index.html <<'MKEOF'
           <!doctype html><html><head><meta charset="utf-8"><title>Moubarak</title></head><body>Moubarak</body></html>
           MKEOF
-          mkdir -p "$(dirname native/MoubarakStoragePlugin.java)"
           cat > native/MoubarakStoragePlugin.java <<'MKEOF'
           package com.khelcom.moubarak;
 
@@ -92,12 +87,6 @@ jobs:
           import java.util.Map;
           import java.util.UUID;
 
-          /**
-           * Enregistre les images, vidéos et fichiers de MOUBARAK dans des dossiers visibles :
-           *  - images  : Pictures/Moubarak Images  (galerie)
-           *  - vidéos  : Movies/Moubarak Videos    (galerie)
-           *  - autres  : Documents/Moubarak        (Mes fichiers)
-           */
           @CapacitorPlugin(
               name = "MoubarakStorage",
               permissions = {
@@ -115,4 +104,216 @@ jobs:
 
               private final Map<String, Sink> sinks = new HashMap<>();
 
-              private st
+              private static final String DIR_IMAGES = "Moubarak Images";
+              private static final String DIR_VIDEOS = "Moubarak Videos";
+              private static final String DIR_FILES = "Moubarak";
+
+              @PluginMethod
+              public void begin(PluginCall call) {
+                  if (Build.VERSION.SDK_INT < 29 && getPermissionState("storage") != PermissionState.GRANTED) {
+                      requestPermissionForAlias("storage", call, "storagePerm");
+                      return;
+                  }
+                  doBegin(call);
+              }
+
+              @PermissionCallback
+              private void storagePerm(PluginCall call) {
+                  if (getPermissionState("storage") == PermissionState.GRANTED) {
+                      doBegin(call);
+                  } else {
+                      call.reject("storage_permission_denied");
+                  }
+              }
+
+              private static String safe(String n) {
+                  if (n == null || n.trim().isEmpty()) n = "Moubarak_fichier";
+                  return n.replaceAll("[\\\\/:*?\"<>|]", "_");
+              }
+
+              private static String mimeFor(String kind, String mime) {
+                  if (mime == null) mime = "";
+                  if ("image".equals(kind)) return mime.startsWith("image/") ? mime : "image/jpeg";
+                  if ("video".equals(kind)) return mime.startsWith("video/") ? mime : "video/mp4";
+                  if (mime.isEmpty() || mime.startsWith("audio/") || mime.startsWith("video/") || mime.startsWith("image/")) {
+                      return "application/octet-stream";
+                  }
+                  return mime;
+              }
+
+              private void doBegin(PluginCall call) {
+                  try {
+                      String name = safe(call.getString("name", "Moubarak_fichier"));
+                      String mime = call.getString("mime", "application/octet-stream");
+                      String kind = call.getString("kind", "file");
+                      boolean image = "image".equals(kind);
+                      boolean video = "video".equals(kind);
+
+                      Sink s = new Sink();
+                      s.kind = kind;
+                      ContentResolver cr = getContext().getContentResolver();
+
+                      if (Build.VERSION.SDK_INT >= 29) {
+                          ContentValues v = new ContentValues();
+                          v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                          v.put(MediaStore.MediaColumns.MIME_TYPE, mimeFor(kind, mime));
+                          Uri coll;
+                          if (image) {
+                              coll = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+                              v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + DIR_IMAGES);
+                          } else if (video) {
+                              coll = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+                              v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/" + DIR_VIDEOS);
+                          } else {
+                              coll = MediaStore.Files.getContentUri("external");
+                              v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOCUMENTS + "/" + DIR_FILES);
+                          }
+                          v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+                          Uri uri = cr.insert(coll, v);
+                          if (uri == null) {
+                              call.reject("insert_failed");
+                              return;
+                          }
+                          s.uri = uri;
+                          s.os = cr.openOutputStream(uri);
+                      } else {
+                          File root = Environment.getExternalStoragePublicDirectory(
+                              image ? Environment.DIRECTORY_PICTURES : (video ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_DOCUMENTS)
+                          );
+                          File dir = new File(root, image ? DIR_IMAGES : (video ? DIR_VIDEOS : DIR_FILES));
+                          dir.mkdirs();
+                          File f = new File(dir, name);
+                          if (f.exists()) {
+                              int dot = name.lastIndexOf('.');
+                              String base = dot > 0 ? name.substring(0, dot) : name;
+                              String ext = dot > 0 ? name.substring(dot) : "";
+                              f = new File(dir, base + "_" + System.currentTimeMillis() + ext);
+                          }
+                          s.file = f;
+                          s.os = new FileOutputStream(f);
+                      }
+
+                      if (s.os == null) {
+                          call.reject("open_failed");
+                          return;
+                      }
+                      String token = UUID.randomUUID().toString();
+                      sinks.put(token, s);
+                      JSObject r = new JSObject();
+                      r.put("token", token);
+                      call.resolve(r);
+                  } catch (Exception e) {
+                      call.reject("begin_failed: " + e.getMessage());
+                  }
+              }
+
+              @PluginMethod
+              public void chunk(PluginCall call) {
+                  String token = call.getString("token");
+                  Sink s = token == null ? null : sinks.get(token);
+                  if (s == null) {
+                      call.reject("no_token");
+                      return;
+                  }
+                  try {
+                      byte[] b = Base64.decode(call.getString("data", ""), Base64.DEFAULT);
+                      s.os.write(b);
+                      call.resolve();
+                  } catch (Exception e) {
+                      discard(token);
+                      call.reject("chunk_failed: " + e.getMessage());
+                  }
+              }
+
+              @PluginMethod
+              public void end(PluginCall call) {
+                  String token = call.getString("token");
+                  Sink s = token == null ? null : sinks.remove(token);
+                  if (s == null) {
+                      call.reject("no_token");
+                      return;
+                  }
+                  try {
+                      s.os.flush();
+                      s.os.close();
+                      if (s.uri != null) {
+                          ContentValues v = new ContentValues();
+                          v.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                          getContext().getContentResolver().update(s.uri, v, null, null);
+                      } else if (s.file != null) {
+                          MediaScannerConnection.scanFile(getContext(), new String[] { s.file.getAbsolutePath() }, null, null);
+                      }
+                      String where = "image".equals(s.kind) ? "Pictures/" + DIR_IMAGES
+                          : ("video".equals(s.kind) ? "Movies/" + DIR_VIDEOS : "Documents/" + DIR_FILES);
+                      JSObject r = new JSObject();
+                      r.put("where", where);
+                      call.resolve(r);
+                  } catch (Exception e) {
+                      call.reject("end_failed: " + e.getMessage());
+                  }
+              }
+
+              @PluginMethod
+              public void abort(PluginCall call) {
+                  discard(call.getString("token"));
+                  call.resolve();
+              }
+
+              private void discard(String token) {
+                  if (token == null) return;
+                  Sink s = sinks.remove(token);
+                  if (s == null) return;
+                  try { s.os.close(); } catch (Exception ignored) {}
+                  try {
+                      if (s.uri != null) getContext().getContentResolver().delete(s.uri, null, null);
+                      else if (s.file != null) s.file.delete();
+                  } catch (Exception ignored) {}
+              }
+          }
+          MKEOF
+
+      - name: Installer Capacitor
+        run: npm install --no-audit --no-fund
+
+      - name: Ajouter Android et le plugin
+        run: |
+          npx cap add android
+          D=android/app/src/main/java/com/khelcom/moubarak
+          mkdir -p $D
+          cp native/MoubarakStoragePlugin.java $D/
+          cat > $D/MainActivity.java <<'MKEOF'
+          package com.khelcom.moubarak;
+          import android.os.Bundle;
+          import com.getcapacitor.BridgeActivity;
+          public class MainActivity extends BridgeActivity {
+            @Override
+            public void onCreate(Bundle savedInstanceState) {
+              registerPlugin(MoubarakStoragePlugin.class);
+              super.onCreate(savedInstanceState);
+            }
+          }
+          MKEOF
+          sed -i 's#<application#<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n    <application#' android/app/src/main/AndroidManifest.xml
+          npx cap sync android
+
+      - name: Icône de l'application
+        continue-on-error: true
+        run: |
+          mkdir -p assets
+          pip install pillow
+          curl -fsSL https://moubarak-khelcom.netlify.app/icon-512.png -o /tmp/i.png
+          python -c "from PIL import Image; Image.open('/tmp/i.png').convert('RGBA').resize((1024,1024)).save('assets/icon-only.png')"
+          npx capacitor-assets generate --android
+
+      - name: Fabriquer l'APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Publier l'APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: Moubarak APK ${{ github.run_number }}
+          files: android/app/build/outputs/apk/debug/app-debug.ap￼Enter
