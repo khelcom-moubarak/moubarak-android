@@ -402,7 +402,7 @@ jobs:
                           NotificationChannel c = new NotificationChannel(CH, "Appels", NotificationManager.IMPORTANCE_HIGH);
                           c.setSound(snd, new AudioAttributes.Builder()
                               .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                              .setContentType(AudioAttributes.CONTENT_TYPE_SONIC)
+                              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                               .build());
                           c.enableVibration(true);
                           c.setVibrationPattern(new long[] { 0, 600, 250, 600, 250, 600, 250, 600 });
