@@ -49,7 +49,7 @@ jobs:
             "appName": "Moubarak",
             "webDir": "www",
             "server": {
-              "url": "https://moubarak-khelcom.netlify.app",
+              "url": "https://khm.khelcom-moubarak.workers.dev",
               "cleartext": false
             }
           }
@@ -296,9 +296,222 @@ jobs:
           sed -i 's#<application#<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n    <application#' android/app/src/main/AndroidManifest.xml
           npx cap sync android
 
+      - name: Firebase et appels sur écran verrouillé
+        run: |
+          D=android/app/src/main/java/com/khelcom/moubarak
+          cat > android/app/google-services.json <<'MKEOF'
+          {
+            "project_info": {
+              "project_number": "214184383965",
+              "project_id": "moubarak-ab9b3",
+              "storage_bucket": "moubarak-ab9b3.firebasestorage.app"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:214184383965:android:9e57c18b9193979b719234",
+                  "android_client_info": {
+                    "package_name": "com.khelcom.moubarak"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  {
+                    "current_key": "AIzaSyAm8hRguOCRfacCHSi7KvEWIpbRjkNWo6Q"
+                  }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": []
+                  }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          MKEOF
+          grep -q "com.google.gms:google-services" android/build.gradle || sed -i "s#classpath 'com.android.tools.build:gradle#classpath 'com.google.gms:google-services:4.4.2'\n        classpath 'com.android.tools.build:gradle#" android/build.gradle
+          grep -q "google-services" android/app/build.gradle || echo "apply plugin: 'com.google.gms.google-services'" >> android/app/build.gradle
+          printf '\ndependencies {\n    implementation "com.google.firebase:firebase-messaging:24.1.0"\n}\n' >> android/app/build.gradle
+          cat > $D/MoubarakFcmPlugin.java <<'MKEOF'
+          package com.khelcom.moubarak;
+
+          import com.getcapacitor.JSObject;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+          import com.google.firebase.messaging.FirebaseMessaging;
+
+          @CapacitorPlugin(name = "MoubarakFcm")
+          public class MoubarakFcmPlugin extends Plugin {
+              @PluginMethod
+              public void getToken(final PluginCall call) {
+                  try {
+                      FirebaseMessaging.getInstance().getToken().addOnCompleteListener(t -> {
+                          if (t.isSuccessful() && t.getResult() != null) {
+                              JSObject r = new JSObject();
+                              r.put("token", t.getResult());
+                              call.resolve(r);
+                          } else {
+                              call.reject("token_failed");
+                          }
+                      });
+                  } catch (Exception e) {
+                      call.reject("token_failed: " + e.getMessage());
+                  }
+              }
+          }
+          MKEOF
+          cat > $D/MoubarakFcmService.java <<'MKEOF'
+          package com.khelcom.moubarak;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.media.AudioAttributes;
+          import android.media.RingtoneManager;
+          import android.net.Uri;
+          import android.os.Build;
+
+          import androidx.core.app.NotificationCompat;
+
+          import com.google.firebase.messaging.FirebaseMessagingService;
+          import com.google.firebase.messaging.RemoteMessage;
+
+          import java.util.Map;
+
+          public class MoubarakFcmService extends FirebaseMessagingService {
+              static final String CH = "mk_calls_v1";
+
+              @Override
+              public void onMessageReceived(RemoteMessage m) {
+                  try {
+                      Map<String, String> d = m.getData();
+                      String title = d.get("title");
+                      if (title == null || title.isEmpty()) title = "Appel entrant";
+                      String body = d.get("body");
+                      if (body == null || body.isEmpty()) body = "Touchez pour répondre";
+
+                      NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                      Uri snd = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+                      if (Build.VERSION.SDK_INT >= 26) {
+                          NotificationChannel c = new NotificationChannel(CH, "Appels", NotificationManager.IMPORTANCE_HIGH);
+                          c.setSound(snd, new AudioAttributes.Builder()
+                              .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                              .setContentType(AudioAttributes.CONTENT_TYPE_SONIC)
+                              .build());
+                          c.enableVibration(true);
+                          c.setVibrationPattern(new long[] { 0, 600, 250, 600, 250, 600, 250, 600 });
+                          c.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                          nm.createNotificationChannel(c);
+                      }
+
+                      Intent i = new Intent(this, MainActivity.class);
+                      i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                      i.putExtra("mk_call", true);
+                      int fl = PendingIntent.FLAG_UPDATE_CURRENT;
+                      if (Build.VERSION.SDK_INT >= 23) fl |= PendingIntent.FLAG_IMMUTABLE;
+                      PendingIntent pi = PendingIntent.getActivity(this, 7, i, fl);
+
+                      NotificationCompat.Builder b = new NotificationCompat.Builder(this, CH)
+                          .setSmallIcon(android.R.drawable.sym_call_incoming)
+                          .setContentTitle(title)
+                          .setContentText(body)
+                          .setCategory(NotificationCompat.CATEGORY_CALL)
+                          .setPriority(NotificationCompat.PRIORITY_MAX)
+                          .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                          .setAutoCancel(true)
+                          .setTimeoutAfter(60000)
+                          .setSound(snd)
+                          .setVibrate(new long[] { 0, 600, 250, 600, 250, 600, 250, 600 })
+                          .setContentIntent(pi)
+                          .setFullScreenIntent(pi, true);
+                      nm.notify(7001, b.build());
+                  } catch (Exception e) {
+                      // on ne plante jamais pendant un appel
+                  }
+              }
+          }
+          MKEOF
+          cat > $D/MainActivity.java <<'MKEOF'
+          package com.khelcom.moubarak;
+
+          import android.Manifest;
+          import android.app.NotificationManager;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.provider.Settings;
+
+          import androidx.core.app.ActivityCompat;
+          import androidx.core.content.ContextCompat;
+
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+            @Override
+            public void onCreate(Bundle savedInstanceState) {
+              registerPlugin(MoubarakStoragePlugin.class);
+              registerPlugin(MoubarakFcmPlugin.class);
+              super.onCreate(savedInstanceState);
+              mkWake(getIntent());
+              mkAsk();
+            }
+
+            @Override
+            protected void onNewIntent(Intent intent) {
+              super.onNewIntent(intent);
+              mkWake(intent);
+            }
+
+            private void mkWake(Intent in) {
+              try {
+                if (in != null && in.getBooleanExtra("mk_call", false) && Build.VERSION.SDK_INT >= 27) {
+                  setShowWhenLocked(true);
+                  setTurnScreenOn(true);
+                }
+              } catch (Exception e) {
+              }
+            }
+
+            private void mkAsk() {
+              try {
+                if (Build.VERSION.SDK_INT >= 33
+                    && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                  ActivityCompat.requestPermissions(this, new String[] { Manifest.permission.POST_NOTIFICATIONS }, 71);
+                  return;
+                }
+                if (Build.VERSION.SDK_INT >= 34) {
+                  NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                  SharedPreferences sp = getSharedPreferences("mk", MODE_PRIVATE);
+                  if (!nm.canUseFullScreenIntent() && !sp.getBoolean("fsi", false)) {
+                    sp.edit().putBoolean("fsi", true).apply();
+                    Intent s = new Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:" + getPackageName()));
+                    startActivity(s);
+                  }
+                }
+              } catch (Exception e) {
+              }
+            }
+          }
+          MKEOF
+          M=android/app/src/main/AndroidManifest.xml
+          sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <application#' $M
+          sed -i 's#</application>#    <service android:name="com.khelcom.moubarak.MoubarakFcmService" android:exported="false">\n            <intent-filter>\n                <action android:name="com.google.firebase.MESSAGING_EVENT" />\n            </intent-filter>\n        </service>\n    </application>#' $M
+          echo "---- manifest ----"
+          cat $M
+
       - name: Logo M de l'application
         run: |
-          curl -fsSL https://moubarak-khelcom.netlify.app/icon-maskable-512.png -o /tmp/i.png || curl -fsSL https://moubarak-khelcom.netlify.app/icon-512.png -o /tmp/i.png
+          curl -fsSL https://khm.khelcom-moubarak.workers.dev/icon-maskable-512.png -o /tmp/i.png || curl -fsSL https://khm.khelcom-moubarak.workers.dev/icon-512.png -o /tmp/i.png
           pip install pillow
           python3 - <<'PYEOF'
           from PIL import Image
@@ -333,4 +546,4 @@ jobs:
         with:
           tag_name: apk-${{ github.run_number }}
           name: Moubarak APK ${{ github.run_number }}
-          files: android/**/*.apk￼Enter
+          files: android/**/*.apk
