@@ -1,6 +1,6 @@
 # Fabrique l'application Android MOUBARAK (APK) automatiquement.
 # L'APK apparait dans l'onglet « Releases » a la fin du build.
-name: Build Moubarak APK
+name:Build Moubarak APK
 
 on:
   workflow_dispatch: {}
