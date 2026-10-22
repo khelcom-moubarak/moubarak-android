@@ -453,6 +453,8 @@ jobs:
 
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
+          import androidx.activity.OnBackPressedCallback;
+          import android.webkit.WebView;
 
           import com.getcapacitor.BridgeActivity;
 
@@ -464,6 +466,20 @@ jobs:
               super.onCreate(savedInstanceState);
               mkWake(getIntent());
               mkAsk();
+              getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+                @Override
+                public void handleOnBackPressed() {
+                  try {
+                    WebView w = getBridge().getWebView();
+                    if (w != null && w.canGoBack()) {
+                      w.goBack();
+                      return;
+                    }
+                  } catch (Exception e) {
+                  }
+                  moveTaskToBack(true);
+                }
+              });
             }
 
             @Override
@@ -504,7 +520,7 @@ jobs:
           }
           MKEOF
           M=android/app/src/main/AndroidManifest.xml
-          sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <application#' $M
+          sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.microphone" android:required="false" />\n    <application#' $M
           sed -i 's#</application>#    <service android:name="com.khelcom.moubarak.MoubarakFcmService" android:exported="false">\n            <intent-filter>\n                <action android:name="com.google.firebase.MESSAGING_EVENT" />\n            </intent-filter>\n        </service>\n    </application>#' $M
           echo "---- manifest ----"
           cat $M
@@ -532,8 +548,48 @@ jobs:
           v=os.path.join(R,'values')
           os.makedirs(v,exist_ok=True)
           open(v+'/ic_launcher_background.xml','w').write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n  <color name="ic_launcher_background">'+col+'</color>\n</resources>\n')
+          import glob
+          n=0
+          for sp in glob.glob(R+'/drawable*/splash.png'):
+              w,hh=Image.open(sp).size
+              Image.new('RGB',(w,hh),col).save(sp)
+              n+=1
+          st=R+'/values/styles.xml'
+          if os.path.exists(st):
+              t=open(st,encoding='utf-8').read()
+              a='<item name="android:background">@drawable/splash</item>'
+              if 'windowSplashScreenBackground' not in t and a in t:
+                  t=t.replace(a,a+'\n        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>')
+                  open(st,'w',encoding='utf-8').write(t)
+          print('demarrage vert',n,'images')
           print('logo ok',col)
           PYEOF
+
+      - name: Signature permanente
+        env:
+          MK_KEYSTORE_B64: ${{ secrets.MK_KEYSTORE_B64 }}
+          MK_KEY_PASS: ${{ secrets.MK_KEY_PASS }}
+        run: |
+          if [ -n "$MK_KEYSTORE_B64" ] && [ -n "$MK_KEY_PASS" ]; then
+            echo "$MK_KEYSTORE_B64" | base64 -d > android/app/moubarak.keystore
+            cat >> android/app/build.gradle <<MKEOF
+
+          android {
+              signingConfigs {
+                  debug {
+                      storeFile file("moubarak.keystore")
+                      storePassword "$MK_KEY_PASS"
+                      keyAlias "moubarak"
+                      keyPassword "$MK_KEY_PASS"
+                      storeType "pkcs12"
+                  }
+              }
+          }
+          MKEOF
+            echo "Signature permanente active"
+          else
+            echo "Secrets absents : signature provisoire (il faudra desinstaller l'ancienne app)"
+          fi
 
       - name: Fabriquer l'APK
         working-directory: android
