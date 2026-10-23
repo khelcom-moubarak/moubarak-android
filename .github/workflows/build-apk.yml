@@ -1,4 +1,4 @@
-# Fabrique l'application Android MOUBARAK (APK) automatiquement.
+# Fabriquenode-versionaon Android MOUBARAK (APK) automatiquement.
 # L'APK apparait dans l'onglet « Releases » a la fin du build.
 name: Build Moubarak APK
 
@@ -48,6 +48,7 @@ jobs:
             "appId": "com.khelcom.moubarak",
             "appName": "Moubarak",
             "webDir": "www",
+            "backgroundColor": "#00000000",
             "server": {
               "url": "https://khm.khelcom-moubarak.workers.dev",
               "cleartext": false
@@ -530,7 +531,7 @@ jobs:
           curl -fsSL https://khm.khelcom-moubarak.workers.dev/icon-maskable-512.png -o /tmp/i.png || curl -fsSL https://khm.khelcom-moubarak.workers.dev/icon-512.png -o /tmp/i.png
           pip install pillow
           python3 - <<'PYEOF'
-          from PIL import Image
+          from PIL import Image, ImageDraw, ImageFont
           import os
           src=Image.open('/tmp/i.png').convert('RGBA')
           col='#%02x%02x%02x'%src.getpixel((4,4))[:3]
@@ -549,19 +550,53 @@ jobs:
           os.makedirs(v,exist_ok=True)
           open(v+'/ic_launcher_background.xml','w').write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n  <color name="ic_launcher_background">'+col+'</color>\n</resources>\n')
           import glob
-          n=0
           for sp in glob.glob(R+'/drawable*/splash.png'):
-              w,hh=Image.open(sp).size
-              Image.new('RGB',(w,hh),col).save(sp)
-              n+=1
+              os.remove(sp)
+          S=4
+          def logo():
+              W=240*S; im=Image.new('RGBA',(W,W),(0,0,0,0)); d=ImageDraw.Draw(im)
+              c=W//2; D=180*S
+              d.ellipse([c-D*0.60,c-D*0.60,c+D*0.60,c+D*0.60],outline=(255,255,255,70),width=3*S)
+              d.ellipse([c-D/2,c-D/2,c+D/2,c+D/2],fill=(255,255,255,255))
+              g=tuple(int(col[i:i+2],16) for i in (1,3,5))+(255,)
+              hw,hh,mid,sw=D*0.25,D*0.225,D*0.04,D*0.10
+              pts=[(c-hw,c+hh),(c-hw,c-hh),(c,c+mid),(c+hw,c-hh),(c+hw,c+hh)]
+              d.line(pts,fill=g,width=int(sw),joint='curve')
+              for x,y in (pts[0],pts[-1],pts[1],pts[3]):
+                  d.ellipse([x-sw/2,y-sw/2,x+sw/2,y+sw/2],fill=g)
+              return im.resize((240,240),Image.LANCZOS)
+          def texte():
+              f=None
+              for q in ('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf','/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf'):
+                  if os.path.exists(q):
+                      f=ImageFont.truetype(q,36); break
+              if f is None:
+                  f=ImageFont.load_default(size=36)
+              t='MOUBARAK'; gap=20
+              ws=[f.getlength(ch) for ch in t]
+              W=int(sum(ws)+gap*(len(t)-1))+8; H=64
+              im=Image.new('RGBA',(W,H),(0,0,0,0)); d=ImageDraw.Draw(im); x=4
+              for ch,w in zip(t,ws):
+                  d.text((x,H//2),ch,font=f,fill=(255,255,255,240),anchor='lm'); x+=w+gap
+              return im
+          dx=R+'/drawable-xhdpi'
+          os.makedirs(dx,exist_ok=True)
+          logo().save(dx+'/splash_logo.png')
+          texte().save(dx+'/splash_text.png')
+          dd=R+'/drawable'
+          os.makedirs(dd,exist_ok=True)
+          open(dd+'/splash.xml','w').write('<?xml version="1.0" encoding="utf-8"?>\n<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n  <item android:drawable="@color/ic_launcher_background"/>\n  <item android:gravity="center"><bitmap android:gravity="center" android:src="@drawable/splash_logo"/></item>\n  <item android:gravity="bottom|center_horizontal" android:bottom="90dp"><bitmap android:gravity="center" android:src="@drawable/splash_text"/></item>\n</layer-list>\n')
           st=R+'/values/styles.xml'
           if os.path.exists(st):
               t=open(st,encoding='utf-8').read()
               a='<item name="android:background">@drawable/splash</item>'
               if 'windowSplashScreenBackground' not in t and a in t:
                   t=t.replace(a,a+'\n        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>')
-                  open(st,'w',encoding='utf-8').write(t)
-          print('demarrage vert',n,'images')
+              z='<item name="android:background">@null</item>'
+              if 'android:windowBackground' not in t and z in t:
+                  t=t.replace(z,z+'\n        <item name="android:windowBackground">@drawable/splash</item>')
+              open(st,'w',encoding='utf-8').write(t)
+          print('demarrage avec logo M')
           print('logo ok',col)
           PYEOF
 
@@ -603,3 +638,4 @@ jobs:
           tag_name: apk-${{ github.run_number }}
           name: Moubarak APK ${{ github.run_number }}
           files: android/**/*.apk
+￼Enter
