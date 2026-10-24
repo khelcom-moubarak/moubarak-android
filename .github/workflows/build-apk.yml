@@ -1,4 +1,4 @@
-# Fabriquenode-versionaon Android MOUBARAK (APK) automatiquement.
+# Fabrique l'application Android MOUBARAK (APK) automatiquement.
 # L'APK apparait dans l'onglet « Releases » a la fin du build.
 name: Build Moubarak APK
 
@@ -35,6 +35,8 @@ jobs:
             "version": "1.0.0",
             "dependencies": {
               "@capacitor/android": "^7.0.0",
+              "@capacitor/app": "^7.0.0",
+              "@capacitor/browser": "^7.0.0",
               "@capacitor/core": "^7.0.0"
             },
             "devDependencies": {
@@ -471,9 +473,21 @@ jobs:
                 @Override
                 public void handleOnBackPressed() {
                   try {
-                    WebView w = getBridge().getWebView();
-                    if (w != null && w.canGoBack()) {
-                      w.goBack();
+                    final WebView w = getBridge().getWebView();
+                    if (w != null) {
+                      w.evaluateJavascript("(function(){try{return window.__mkBackNative?(window.__mkBackNative()?'1':'0'):'x'}catch(e){return 'x'}})()", new android.webkit.ValueCallback<String>() {
+                        @Override
+                        public void onReceiveValue(String v) {
+                          if ("\"1\"".equals(v)) {
+                            return;
+                          }
+                          if ("\"x\"".equals(v) && w.canGoBack()) {
+                            w.goBack();
+                            return;
+                          }
+                          moveTaskToBack(true);
+                        }
+                      });
                       return;
                     }
                   } catch (Exception e) {
@@ -523,6 +537,7 @@ jobs:
           M=android/app/src/main/AndroidManifest.xml
           sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.microphone" android:required="false" />\n    <application#' $M
           sed -i 's#</application>#    <service android:name="com.khelcom.moubarak.MoubarakFcmService" android:exported="false">\n            <intent-filter>\n                <action android:name="com.google.firebase.MESSAGING_EVENT" />\n            </intent-filter>\n        </service>\n    </application>#' $M
+          sed -i '0,/<\/activity>/s#</activity>#    <intent-filter>\n                <action android:name="android.intent.action.VIEW" />\n                <category android:name="android.intent.category.DEFAULT" />\n                <category android:name="android.intent.category.BROWSABLE" />\n                <data android:scheme="com.khelcom.moubarak" android:host="login-callback" />\n            </intent-filter>\n        </activity>#' $M
           echo "---- manifest ----"
           cat $M
 
