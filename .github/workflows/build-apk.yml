@@ -674,4 +674,4 @@ jobs:
           tag_name: apk-${{ github.run_number }}
           name: Moubarak APK ${{ github.run_number }}
           files: android/**/*.apk
-￼Enter
+
