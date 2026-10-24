@@ -37,7 +37,9 @@ jobs:
               "@capacitor/android": "^7.0.0",
               "@capacitor/app": "^7.0.0",
               "@capacitor/browser": "^7.0.0",
-              "@capacitor/core": "^7.0.0"
+              "@capacitor/core": "^7.0.0",
+              "@capacitor/filesystem": "^7.0.0",
+              "@capacitor/share": "^7.0.0"
             },
             "devDependencies": {
               "@capacitor/assets": "^3.0.5",
@@ -381,6 +383,7 @@ jobs:
           import android.os.Build;
 
           import androidx.core.app.NotificationCompat;
+          import android.graphics.BitmapFactory;
 
           import com.google.firebase.messaging.FirebaseMessagingService;
           import com.google.firebase.messaging.RemoteMessage;
@@ -421,7 +424,8 @@ jobs:
                       PendingIntent pi = PendingIntent.getActivity(this, 7, i, fl);
 
                       NotificationCompat.Builder b = new NotificationCompat.Builder(this, CH)
-                          .setSmallIcon(android.R.drawable.sym_call_incoming)
+                          .setSmallIcon(R.drawable.ic_stat_moubarak)
+                          .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.notif_large))
                           .setContentTitle(title)
                           .setContentText(body)
                           .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -611,6 +615,23 @@ jobs:
               if 'android:windowBackground' not in t and z in t:
                   t=t.replace(z,z+'\n        <item name="android:windowBackground">@drawable/splash</item>')
               open(st,'w',encoding='utf-8').write(t)
+          def stat(sz):
+              K=8; W=sz*K; im=Image.new('RGBA',(W,W),(0,0,0,0)); d=ImageDraw.Draw(im)
+              d.ellipse([W*0.04,W*0.04,W*0.96,W*0.96],fill=(255,255,255,255))
+              c=W//2; hw,hh,mid,sw=W*0.20,W*0.18,W*0.03,W*0.09
+              pts=[(c-hw,c+hh),(c-hw,c-hh),(c,c+mid),(c+hw,c-hh),(c+hw,c+hh)]
+              m=Image.new('L',(W,W),0); md=ImageDraw.Draw(m)
+              md.line(pts,fill=255,width=int(sw),joint='curve')
+              for x,y in (pts[0],pts[-1],pts[1],pts[3]):
+                  md.ellipse([x-sw/2,y-sw/2,x+sw/2,y+sw/2],fill=255)
+              a=Image.composite(Image.new('L',(W,W),0),im.split()[3],m)
+              im.putalpha(a)
+              return im.resize((sz,sz),Image.LANCZOS)
+          for q,z in (('mdpi',24),('hdpi',36),('xhdpi',48),('xxhdpi',72),('xxxhdpi',96)):
+              os.makedirs(R+'/drawable-'+q,exist_ok=True)
+              stat(z).save(R+'/drawable-'+q+'/ic_stat_moubarak.png')
+          os.makedirs(R+'/drawable-nodpi',exist_ok=True)
+          Image.open('/tmp/i.png').convert('RGBA').resize((192,192),Image.LANCZOS).save(R+'/drawable-nodpi/notif_large.png')
           print('demarrage avec logo M')
           print('logo ok',col)
           PYEOF
@@ -653,4 +674,3 @@ jobs:
           tag_name: apk-${{ github.run_number }}
           name: Moubarak APK ${{ github.run_number }}
           files: android/**/*.apk
-
