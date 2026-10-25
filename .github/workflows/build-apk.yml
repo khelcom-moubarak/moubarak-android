@@ -395,10 +395,26 @@ jobs:
           public class MoubarakPickerPlugin extends Plugin {
               @PluginMethod
               public void pickVideo(PluginCall call) {
-                  Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                  i.addCategory(Intent.CATEGORY_OPENABLE);
-                  i.setType("video/*");
-                  startActivityForResult(call, i, "pickResult");
+                  Intent i;
+                  if (android.os.Build.VERSION.SDK_INT >= 33) {
+                      i = new Intent(MediaStore.ACTION_PICK_IMAGES);
+                      i.setType("video/*");
+                  } else {
+                      i = new Intent(Intent.ACTION_PICK);
+                      i.setDataAndType(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "video/*");
+                  }
+                  try {
+                      startActivityForResult(call, i, "pickResult");
+                  } catch (Exception e) {
+                      Intent d = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                      d.addCategory(Intent.CATEGORY_OPENABLE);
+                      d.setType("video/*");
+                      try {
+                          startActivityForResult(call, d, "pickResult");
+                      } catch (Exception e2) {
+                          call.reject("galerie indisponible");
+                      }
+                  }
               }
 
               @ActivityCallback
