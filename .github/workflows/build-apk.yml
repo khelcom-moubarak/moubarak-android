@@ -395,8 +395,9 @@ jobs:
           public class MoubarakPickerPlugin extends Plugin {
               @PluginMethod
               public void pickVideo(PluginCall call) {
-                  Intent i = new Intent(Intent.ACTION_PICK);
-                  i.setDataAndType(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "video/*");
+                  Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                  i.addCategory(Intent.CATEGORY_OPENABLE);
+                  i.setType("video/*");
                   startActivityForResult(call, i, "pickResult");
               }
 
@@ -798,4 +799,3 @@ jobs:
           tag_name: apk-${{ github.run_number }}
           name: Moubarak APK ${{ github.run_number }}
           files: android/**/*.apk
-
