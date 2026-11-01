@@ -655,22 +655,33 @@ jobs:
           import android.media.RingtoneManager;
           import android.net.Uri;
           import android.os.Build;
-
           import androidx.core.app.NotificationCompat;
           import android.graphics.BitmapFactory;
-
           import com.google.firebase.messaging.FirebaseMessagingService;
           import com.google.firebase.messaging.RemoteMessage;
-
           import java.util.Map;
 
           public class MoubarakFcmService extends FirebaseMessagingService {
+
               static final String CH = "mk_calls_v1";
 
               @Override
               public void onMessageReceived(RemoteMessage m) {
                   try {
                       Map<String, String> d = m.getData();
+                      String kind = d.get("kind");
+                      // Notification normale (j'aime, message...) recue pendant que l'app est ouverte :
+                      // le site l'affiche deja, on ne fait RIEN (avant, cela declenchait un faux appel).
+                      if ("n".equals(kind)) {
+                          return;
+                      }
+                      // Azan : son d'Azan quand le telephone est verrouille
+                      if ("azan".equals(kind)) {
+                          mkAzan(d);
+                          return;
+                      }
+
+                      // ---- Appel entrant : comportement d'origine, inchange ----
                       String title = d.get("title");
                       if (title == null || title.isEmpty()) title = "Appel entrant";
                       String body = d.get("body");
@@ -678,12 +689,13 @@ jobs:
 
                       NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
                       Uri snd = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+
                       if (Build.VERSION.SDK_INT >= 26) {
                           NotificationChannel c = new NotificationChannel(CH, "Appels", NotificationManager.IMPORTANCE_HIGH);
                           c.setSound(snd, new AudioAttributes.Builder()
-                              .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                              .build());
+                                  .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                                  .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                  .build());
                           c.enableVibration(true);
                           c.setVibrationPattern(new long[] { 0, 600, 250, 600, 250, 600, 250, 600 });
                           c.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
@@ -698,22 +710,80 @@ jobs:
                       PendingIntent pi = PendingIntent.getActivity(this, 7, i, fl);
 
                       NotificationCompat.Builder b = new NotificationCompat.Builder(this, CH)
-                          .setSmallIcon(R.drawable.ic_stat_moubarak)
-                          .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.notif_large))
-                          .setContentTitle(title)
-                          .setContentText(body)
-                          .setCategory(NotificationCompat.CATEGORY_CALL)
-                          .setPriority(NotificationCompat.PRIORITY_MAX)
-                          .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                          .setAutoCancel(true)
-                          .setTimeoutAfter(60000)
-                          .setSound(snd)
-                          .setVibrate(new long[] { 0, 600, 250, 600, 250, 600, 250, 600 })
-                          .setContentIntent(pi)
-                          .setFullScreenIntent(pi, true);
+                              .setSmallIcon(R.drawable.ic_stat_moubarak)
+                              .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.notif_large))
+                              .setContentTitle(title)
+                              .setContentText(body)
+                              .setCategory(NotificationCompat.CATEGORY_CALL)
+                              .setPriority(NotificationCompat.PRIORITY_MAX)
+                              .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                              .setAutoCancel(true)
+                              .setTimeoutAfter(60000)
+                              .setSound(snd)
+                              .setVibrate(new long[] { 0, 600, 250, 600, 250, 600, 250, 600 })
+                              .setContentIntent(pi)
+                              .setFullScreenIntent(pi, true);
                       nm.notify(7001, b.build());
                   } catch (Exception e) {
                       // on ne plante jamais pendant un appel
+                  }
+              }
+
+              // Notification d'Azan avec le son choisi (fichiers res/raw/azan_<voix>.mp3)
+              private void mkAzan(Map<String, String> d) {
+                  try {
+                      String title = d.get("title");
+                      if (title == null || title.isEmpty()) title = "Azan";
+                      String body = d.get("body");
+                      if (body == null || body.isEmpty()) body = "C'est l'heure de la prière";
+                      String voice = d.get("voice");
+                      if (voice == null || voice.isEmpty()) voice = "makkah";
+                      voice = voice.toLowerCase().replaceAll("[^a-z0-9]", "");
+
+                      int res = getResources().getIdentifier("azan_" + voice, "raw", getPackageName());
+                      if (res == 0) {
+                          voice = "makkah";
+                          res = getResources().getIdentifier("azan_makkah", "raw", getPackageName());
+                      }
+                      Uri snd = res != 0
+                              ? Uri.parse("android.resource://" + getPackageName() + "/raw/azan_" + voice)
+                              : RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                      String ch = "mk_azan_v1_" + voice;
+
+                      NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                      if (Build.VERSION.SDK_INT >= 26) {
+                          NotificationChannel c = new NotificationChannel(ch, "Azan", NotificationManager.IMPORTANCE_HIGH);
+                          c.setSound(snd, new AudioAttributes.Builder()
+                                  .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                                  .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                  .build());
+                          c.enableVibration(true);
+                          c.setVibrationPattern(new long[] { 0, 400, 200, 400 });
+                          c.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                          nm.createNotificationChannel(c);
+                      }
+
+                      Intent i = new Intent(this, MainActivity.class);
+                      i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                      int fl = PendingIntent.FLAG_UPDATE_CURRENT;
+                      if (Build.VERSION.SDK_INT >= 23) fl |= PendingIntent.FLAG_IMMUTABLE;
+                      PendingIntent pi = PendingIntent.getActivity(this, 8, i, fl);
+
+                      NotificationCompat.Builder b = new NotificationCompat.Builder(this, ch)
+                              .setSmallIcon(R.drawable.ic_stat_moubarak)
+                              .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.notif_large))
+                              .setContentTitle(title)
+                              .setContentText(body)
+                              .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                              .setPriority(NotificationCompat.PRIORITY_HIGH)
+                              .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                              .setAutoCancel(true)
+                              .setSound(snd)
+                              .setVibrate(new long[] { 0, 400, 200, 400 })
+                              .setContentIntent(pi);
+                      nm.notify(7100 + (int) (System.currentTimeMillis() % 1000), b.build());
+                  } catch (Exception e) {
+                      // jamais de plantage
                   }
               }
           }
@@ -820,6 +890,15 @@ jobs:
           sed -i 's#<application#<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <application#' $M
           echo "---- manifest ----"
           cat $M
+
+      - name: Azan natif (sons)
+        run: |
+          R=android/app/src/main/res/raw
+          mkdir -p $R
+          for v in makkah madina aqsa alafasy hassan2 azhar touba; do
+            curl -fsSL "https://khm.khelcom-moubarak.workers.dev/adhan/$v.mp3" -o "$R/azan_$v.mp3" || rm -f "$R/azan_$v.mp3"
+          done
+          ls -la $R
 
       - name: Logo M de l'application
         run: |
