@@ -1,0 +1,1041 @@
+# Fabrique le fichier Play Store (AAB signé, release) de l'application Android MOUBARAK.
+# Cible Android 16 (API 36) avec Capacitor 8. Le fichier .aab apparait dans l'onglet « Releases » a la fin du build.
+name: Build Moubarak AAB Play Store
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Écrire les fichiers du projet
+        run: |
+          cat > package.json <<'MKEOF'
+          {
+            "name": "moubarak-android",
+            "private": true,
+            "version": "1.0.0",
+            "dependencies": {
+              "@capacitor/android": "^8.0.0",
+              "@capacitor/app": "^8.0.0",
+              "@capacitor/browser": "^8.0.0",
+              "@capacitor/core": "^8.0.0",
+              "@capacitor/filesystem": "^8.0.0",
+              "@capacitor/share": "^8.0.0"
+            },
+            "devDependencies": {
+              "@capacitor/assets": "^3.0.5",
+              "@capacitor/cli": "^8.0.0"
+            }
+          }
+          MKEOF
+          cat > capacitor.config.json <<'MKEOF'
+          {
+            "appId": "com.khelcom.moubarak",
+            "appName": "Moubarak",
+            "webDir": "www",
+            "backgroundColor": "#00000000",
+            "server": {
+              "url": "https://khm.khelcom-moubarak.workers.dev",
+              "cleartext": false
+            }
+          }
+          MKEOF
+          mkdir -p www native
+          cat > www/index.html <<'MKEOF'
+          <!doctype html><html><head><meta charset="utf-8"><title>Moubarak</title></head><body>Moubarak</body></html>
+          MKEOF
+          cat > native/MoubarakStoragePlugin.java <<'MKEOF'
+          package com.khelcom.moubarak;
+
+          import android.Manifest;
+          import android.content.ContentResolver;
+          import android.content.ContentValues;
+          import android.media.MediaScannerConnection;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Environment;
+          import android.provider.MediaStore;
+          import android.util.Base64;
+
+          import com.getcapacitor.JSObject;
+          import com.getcapacitor.PermissionState;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+          import com.getcapacitor.annotation.Permission;
+          import com.getcapacitor.annotation.PermissionCallback;
+
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.io.OutputStream;
+          import java.util.HashMap;
+          import java.util.Map;
+          import java.util.UUID;
+
+          @CapacitorPlugin(
+              name = "MoubarakStorage",
+              permissions = {
+                  @Permission(alias = "storage", strings = { Manifest.permission.WRITE_EXTERNAL_STORAGE })
+              }
+          )
+          public class MoubarakStoragePlugin extends Plugin {
+
+              private static class Sink {
+                  OutputStream os;
+                  Uri uri;
+                  File file;
+                  String kind;
+              }
+
+              private final Map<String, Sink> sinks = new HashMap<>();
+
+              private static final String DIR_IMAGES = "Moubarak Images";
+              private static final String DIR_VIDEOS = "Moubarak Videos";
+              private static final String DIR_FILES = "Moubarak";
+
+              @PluginMethod
+              public void begin(PluginCall call) {
+                  if (Build.VERSION.SDK_INT < 29 && getPermissionState("storage") != PermissionState.GRANTED) {
+                      requestPermissionForAlias("storage", call, "storagePerm");
+                      return;
+                  }
+                  doBegin(call);
+              }
+
+              @PermissionCallback
+              private void storagePerm(PluginCall call) {
+                  if (getPermissionState("storage") == PermissionState.GRANTED) {
+                      doBegin(call);
+                  } else {
+                      call.reject("storage_permission_denied");
+                  }
+              }
+
+              private static String safe(String n) {
+                  if (n == null || n.trim().isEmpty()) n = "Moubarak_fichier";
+                  return n.replaceAll("[\\\\/:*?\"<>|]", "_");
+              }
+
+              private static String mimeFor(String kind, String mime) {
+                  if (mime == null) mime = "";
+                  if ("image".equals(kind)) return mime.startsWith("image/") ? mime : "image/jpeg";
+                  if ("video".equals(kind)) return mime.startsWith("video/") ? mime : "video/mp4";
+                  if (mime.isEmpty() || mime.startsWith("audio/") || mime.startsWith("video/") || mime.startsWith("image/")) {
+                      return "application/octet-stream";
+                  }
+                  return mime;
+              }
+
+              private void doBegin(PluginCall call) {
+                  try {
+                      String name = safe(call.getString("name", "Moubarak_fichier"));
+                      String mime = call.getString("mime", "application/octet-stream");
+                      String kind = call.getString("kind", "file");
+                      boolean image = "image".equals(kind);
+                      boolean video = "video".equals(kind);
+
+                      Sink s = new Sink();
+                      s.kind = kind;
+                      ContentResolver cr = getContext().getContentResolver();
+
+                      if (Build.VERSION.SDK_INT >= 29) {
+                          ContentValues v = new ContentValues();
+                          v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                          v.put(MediaStore.MediaColumns.MIME_TYPE, mimeFor(kind, mime));
+                          Uri coll;
+                          if (image) {
+                              coll = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+                              v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + DIR_IMAGES);
+                          } else if (video) {
+                              coll = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+                              v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/" + DIR_VIDEOS);
+                          } else {
+                              coll = MediaStore.Files.getContentUri("external");
+                              v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOCUMENTS + "/" + DIR_FILES);
+                          }
+                          v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+                          Uri uri = cr.insert(coll, v);
+                          if (uri == null) {
+                              call.reject("insert_failed");
+                              return;
+                          }
+                          s.uri = uri;
+                          s.os = cr.openOutputStream(uri);
+                      } else {
+                          File root = Environment.getExternalStoragePublicDirectory(
+                              image ? Environment.DIRECTORY_PICTURES : (video ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_DOCUMENTS)
+                          );
+                          File dir = new File(root, image ? DIR_IMAGES : (video ? DIR_VIDEOS : DIR_FILES));
+                          dir.mkdirs();
+                          File f = new File(dir, name);
+                          if (f.exists()) {
+                              int dot = name.lastIndexOf('.');
+                              String base = dot > 0 ? name.substring(0, dot) : name;
+                              String ext = dot > 0 ? name.substring(dot) : "";
+                              f = new File(dir, base + "_" + System.currentTimeMillis() + ext);
+                          }
+                          s.file = f;
+                          s.os = new FileOutputStream(f);
+                      }
+
+                      if (s.os == null) {
+                          call.reject("open_failed");
+                          return;
+                      }
+                      String token = UUID.randomUUID().toString();
+                      sinks.put(token, s);
+                      JSObject r = new JSObject();
+                      r.put("token", token);
+                      call.resolve(r);
+                  } catch (Exception e) {
+                      call.reject("begin_failed: " + e.getMessage());
+                  }
+              }
+
+              @PluginMethod
+              public void chunk(PluginCall call) {
+                  String token = call.getString("token");
+                  Sink s = token == null ? null : sinks.get(token);
+                  if (s == null) {
+                      call.reject("no_token");
+                      return;
+                  }
+                  try {
+                      byte[] b = Base64.decode(call.getString("data", ""), Base64.DEFAULT);
+                      s.os.write(b);
+                      call.resolve();
+                  } catch (Exception e) {
+                      discard(token);
+                      call.reject("chunk_failed: " + e.getMessage());
+                  }
+              }
+
+              @PluginMethod
+              public void end(PluginCall call) {
+                  String token = call.getString("token");
+                  Sink s = token == null ? null : sinks.remove(token);
+                  if (s == null) {
+                      call.reject("no_token");
+                      return;
+                  }
+                  try {
+                      s.os.flush();
+                      s.os.close();
+                      if (s.uri != null) {
+                          ContentValues v = new ContentValues();
+                          v.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                          getContext().getContentResolver().update(s.uri, v, null, null);
+                      } else if (s.file != null) {
+                          MediaScannerConnection.scanFile(getContext(), new String[] { s.file.getAbsolutePath() }, null, null);
+                      }
+                      String where = "image".equals(s.kind) ? "Pictures/" + DIR_IMAGES
+                          : ("video".equals(s.kind) ? "Movies/" + DIR_VIDEOS : "Documents/" + DIR_FILES);
+                      JSObject r = new JSObject();
+                      r.put("where", where);
+                      call.resolve(r);
+                  } catch (Exception e) {
+                      call.reject("end_failed: " + e.getMessage());
+                  }
+              }
+
+              @PluginMethod
+              public void abort(PluginCall call) {
+                  discard(call.getString("token"));
+                  call.resolve();
+              }
+
+              private void discard(String token) {
+                  if (token == null) return;
+                  Sink s = sinks.remove(token);
+                  if (s == null) return;
+                  try { s.os.close(); } catch (Exception ignored) {}
+                  try {
+                      if (s.uri != null) getContext().getContentResolver().delete(s.uri, null, null);
+                      else if (s.file != null) s.file.delete();
+                  } catch (Exception ignored) {}
+              }
+          }
+          MKEOF
+
+      - name: Installer Capacitor
+        run: npm install --no-audit --no-fund
+
+      - name: Ajouter Android et le plugin
+        run: |
+          npx cap add android
+          D=android/app/src/main/java/com/khelcom/moubarak
+          mkdir -p $D
+          cp native/MoubarakStoragePlugin.java $D/
+          cat > $D/MainActivity.java <<'MKEOF'
+          package com.khelcom.moubarak;
+          import android.os.Bundle;
+          import com.getcapacitor.BridgeActivity;
+          public class MainActivity extends BridgeActivity {
+            @Override
+            public void onCreate(Bundle savedInstanceState) {
+              registerPlugin(MoubarakStoragePlugin.class);
+              super.onCreate(savedInstanceState);
+            }
+          }
+          MKEOF
+          sed -i 's#<application#<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n    <application#' android/app/src/main/AndroidManifest.xml
+          npx cap sync android
+
+      - name: Firebase et appels sur écran verrouillé
+        run: |
+          D=android/app/src/main/java/com/khelcom/moubarak
+          cat > android/app/google-services.json <<'MKEOF'
+          {
+            "project_info": {
+              "project_number": "214184383965",
+              "project_id": "moubarak-ab9b3",
+              "storage_bucket": "moubarak-ab9b3.firebasestorage.app"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:214184383965:android:9e57c18b9193979b719234",
+                  "android_client_info": {
+                    "package_name": "com.khelcom.moubarak"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  {
+                    "current_key": "AIzaSyAm8hRguOCRfacCHSi7KvEWIpbRjkNWo6Q"
+                  }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": []
+                  }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          MKEOF
+          grep -q "com.google.gms:google-services" android/build.gradle || sed -i "s#classpath 'com.android.tools.build:gradle#classpath 'com.google.gms:google-services:4.4.4'\n        classpath 'com.android.tools.build:gradle#" android/build.gradle
+          grep -q "google-services" android/app/build.gradle || echo "apply plugin: 'com.google.gms.google-services'" >> android/app/build.gradle
+          printf '\ndependencies {\n    implementation "com.google.firebase:firebase-messaging:25.0.1"\n}\n' >> android/app/build.gradle
+          cat > $D/MoubarakFcmPlugin.java <<'MKEOF'
+          package com.khelcom.moubarak;
+
+          import com.getcapacitor.JSObject;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+          import com.google.firebase.messaging.FirebaseMessaging;
+
+          @CapacitorPlugin(name = "MoubarakFcm")
+          public class MoubarakFcmPlugin extends Plugin {
+              @PluginMethod
+              public void getToken(final PluginCall call) {
+                  try {
+                      FirebaseMessaging.getInstance().getToken().addOnCompleteListener(t -> {
+                          if (t.isSuccessful() && t.getResult() != null) {
+                              JSObject r = new JSObject();
+                              r.put("token", t.getResult());
+                              call.resolve(r);
+                          } else {
+                              call.reject("token_failed");
+                          }
+                      });
+                  } catch (Exception e) {
+                      call.reject("token_failed: " + e.getMessage());
+                  }
+              }
+          }
+          MKEOF
+          cat > $D/MoubarakPickerPlugin.java <<'MKEOF'
+          package com.khelcom.moubarak;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.ContentResolver;
+          import android.content.ContentUris;
+          import android.content.Intent;
+          import android.database.Cursor;
+          import android.graphics.Bitmap;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.provider.MediaStore;
+          import android.provider.OpenableColumns;
+          import android.util.Base64;
+          import android.util.Size;
+          import androidx.activity.result.ActivityResult;
+          import com.getcapacitor.JSArray;
+          import com.getcapacitor.JSObject;
+          import com.getcapacitor.PermissionState;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.ActivityCallback;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+          import com.getcapacitor.annotation.Permission;
+          import com.getcapacitor.annotation.PermissionCallback;
+          import java.io.ByteArrayOutputStream;
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.io.InputStream;
+          import java.io.OutputStream;
+          import java.io.RandomAccessFile;
+
+          @CapacitorPlugin(
+              name = "MoubarakPicker",
+              permissions = {
+                  @Permission(strings = {Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO}, alias = "media13"),
+                  @Permission(strings = {Manifest.permission.READ_EXTERNAL_STORAGE}, alias = "media12")
+              }
+          )
+          public class MoubarakPickerPlugin extends Plugin {
+
+              private String mediaAlias() {
+                  return Build.VERSION.SDK_INT >= 33 ? "media13" : "media12";
+              }
+
+              @PluginMethod
+              public void listMedia(PluginCall call) {
+                  if (getPermissionState(mediaAlias()) != PermissionState.GRANTED) {
+                      requestPermissionForAlias(mediaAlias(), call, "mediaPerm");
+                      return;
+                  }
+                  doList(call);
+              }
+
+              @PermissionCallback
+              private void mediaPerm(PluginCall call) {
+                  if (getPermissionState(mediaAlias()) == PermissionState.GRANTED) {
+                      doList(call);
+                  } else {
+                      call.reject("permission");
+                  }
+              }
+
+              private void doList(PluginCall call) {
+                  try {
+                      int offset = call.getInt("offset", 0);
+                      int limit = call.getInt("limit", 45);
+                      String kind = call.getString("kind", "all");
+                      String sel;
+                      if ("video".equals(kind)) {
+                          sel = "media_type=3";
+                      } else if ("photo".equals(kind)) {
+                          sel = "media_type=1";
+                      } else {
+                          sel = "media_type=1 OR media_type=3";
+                      }
+                      Uri files = MediaStore.Files.getContentUri("external");
+                      String[] proj = new String[] {"_id", "media_type", "date_added"};
+                      ContentResolver cr = getContext().getContentResolver();
+                      Cursor c;
+                      if (Build.VERSION.SDK_INT >= 26) {
+                          Bundle b = new Bundle();
+                          b.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, sel);
+                          b.putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, new String[] {"date_added"});
+                          b.putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING);
+                          b.putInt(ContentResolver.QUERY_ARG_LIMIT, limit);
+                          b.putInt(ContentResolver.QUERY_ARG_OFFSET, offset);
+                          c = cr.query(files, proj, b, null);
+                      } else {
+                          c = cr.query(files, proj, sel, null, "date_added DESC LIMIT " + limit + " OFFSET " + offset);
+                      }
+                      JSArray arr = new JSArray();
+                      if (c != null) {
+                          try {
+                              while (c.moveToNext()) {
+                                  long id = c.getLong(0);
+                                  boolean video = c.getInt(1) == 3;
+                                  Uri u = ContentUris.withAppendedId(video ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI : MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+                                  JSObject o = new JSObject();
+                                  o.put("uri", u.toString());
+                                  o.put("video", video);
+                                  o.put("thumb", thumb(u, id, video));
+                                  arr.put(o);
+                              }
+                          } finally {
+                              c.close();
+                          }
+                      }
+                      JSObject res = new JSObject();
+                      res.put("items", arr);
+                      call.resolve(res);
+                  } catch (Exception e) {
+                      call.reject("erreur: " + e.getMessage());
+                  }
+              }
+
+              private String thumb(Uri u, long id, boolean video) {
+                  try {
+                      ContentResolver cr = getContext().getContentResolver();
+                      Bitmap bm;
+                      if (Build.VERSION.SDK_INT >= 29) {
+                          bm = cr.loadThumbnail(u, new Size(240, 240), null);
+                      } else if (video) {
+                          bm = MediaStore.Video.Thumbnails.getThumbnail(cr, id, MediaStore.Video.Thumbnails.MINI_KIND, null);
+                      } else {
+                          bm = MediaStore.Images.Thumbnails.getThumbnail(cr, id, MediaStore.Images.Thumbnails.MINI_KIND, null);
+                      }
+                      if (bm == null) {
+                          return "";
+                      }
+                      ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                      bm.compress(Bitmap.CompressFormat.JPEG, 70, bo);
+                      return "data:image/jpeg;base64," + Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP);
+                  } catch (Exception e) {
+                      return "";
+                  }
+              }
+
+              private JSObject copyToCache(Uri uri, String defMime) throws Exception {
+                  String name = "media";
+                  Cursor c = getContext().getContentResolver().query(uri, null, null, null, null);
+                  if (c != null) {
+                      try {
+                          if (c.moveToFirst()) {
+                              int n = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                              if (n >= 0 && c.getString(n) != null) {
+                                  name = c.getString(n);
+                              }
+                          }
+                      } finally {
+                          c.close();
+                      }
+                  }
+                  String mime = getContext().getContentResolver().getType(uri);
+                  if (mime == null) {
+                      mime = defMime;
+                  }
+                  File out = new File(getContext().getCacheDir(), "pick_" + System.currentTimeMillis() + "_" + (int) (Math.random() * 10000) + ".bin");
+                  InputStream in = getContext().getContentResolver().openInputStream(uri);
+                  OutputStream os = new FileOutputStream(out);
+                  byte[] buf = new byte[65536];
+                  int r;
+                  while ((r = in.read(buf)) > 0) {
+                      os.write(buf, 0, r);
+                  }
+                  os.close();
+                  in.close();
+                  JSObject o = new JSObject();
+                  o.put("path", out.getAbsolutePath());
+                  o.put("name", name);
+                  o.put("mime", mime);
+                  o.put("size", out.length());
+                  return o;
+              }
+
+              @PluginMethod
+              public void copyUri(PluginCall call) {
+                  try {
+                      Uri uri = Uri.parse(call.getString("uri"));
+                      if (!"media".equals(uri.getAuthority())) {
+                          call.reject("uri refusee");
+                          return;
+                      }
+                      boolean video = call.getBoolean("video", false);
+                      call.resolve(copyToCache(uri, video ? "video/mp4" : "image/jpeg"));
+                  } catch (Exception e) {
+                      call.reject("erreur: " + e.getMessage());
+                  }
+              }
+
+              @PluginMethod
+              public void pickVideo(PluginCall call) {
+                  Intent i;
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      i = new Intent(MediaStore.ACTION_PICK_IMAGES);
+                      i.setType("video/*");
+                  } else {
+                      i = new Intent(Intent.ACTION_PICK);
+                      i.setDataAndType(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "video/*");
+                  }
+                  try {
+                      startActivityForResult(call, i, "pickResult");
+                  } catch (Exception e) {
+                      Intent d = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                      d.addCategory(Intent.CATEGORY_OPENABLE);
+                      d.setType("video/*");
+                      try {
+                          startActivityForResult(call, d, "pickResult");
+                      } catch (Exception e2) {
+                          call.reject("galerie indisponible");
+                      }
+                  }
+              }
+
+              @ActivityCallback
+              private void pickResult(PluginCall call, ActivityResult result) {
+                  if (call == null) {
+                      return;
+                  }
+                  if (result.getResultCode() != Activity.RESULT_OK || result.getData() == null || result.getData().getData() == null) {
+                      call.reject("cancel");
+                      return;
+                  }
+                  try {
+                      call.resolve(copyToCache(result.getData().getData(), "video/mp4"));
+                  } catch (Exception e) {
+                      call.reject("erreur: " + e.getMessage());
+                  }
+              }
+
+              @PluginMethod
+              public void readChunk(PluginCall call) {
+                  try {
+                      String path = call.getString("path");
+                      int offset = call.getInt("offset", 0);
+                      int len = call.getInt("length", 3145728);
+                      File f = new File(path);
+                      if (!f.getCanonicalPath().startsWith(getContext().getCacheDir().getCanonicalPath())) {
+                          call.reject("chemin refuse");
+                          return;
+                      }
+                      RandomAccessFile raf = new RandomAccessFile(f, "r");
+                      raf.seek(offset);
+                      byte[] b = new byte[len];
+                      int n = raf.read(b);
+                      raf.close();
+                      if (n < 0) {
+                          n = 0;
+                      }
+                      JSObject o = new JSObject();
+                      o.put("data", Base64.encodeToString(b, 0, n, Base64.NO_WRAP));
+                      o.put("n", n);
+                      call.resolve(o);
+                  } catch (Exception e) {
+                      call.reject("erreur: " + e.getMessage());
+                  }
+              }
+
+              @PluginMethod
+              public void remove(PluginCall call) {
+                  try {
+                      File f = new File(call.getString("path"));
+                      if (f.getCanonicalPath().startsWith(getContext().getCacheDir().getCanonicalPath())) {
+                          f.delete();
+                      }
+                  } catch (Exception e) {
+                  }
+                  call.resolve();
+              }
+          }
+          MKEOF
+          cat > $D/MoubarakFcmService.java <<'MKEOF'
+          package com.khelcom.moubarak;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.media.AudioAttributes;
+          import android.media.RingtoneManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import androidx.core.app.NotificationCompat;
+          import android.graphics.BitmapFactory;
+          import com.google.firebase.messaging.FirebaseMessagingService;
+          import com.google.firebase.messaging.RemoteMessage;
+          import java.util.Map;
+
+          public class MoubarakFcmService extends FirebaseMessagingService {
+
+              static final String CH = "mk_calls_v1";
+
+              @Override
+              public void onMessageReceived(RemoteMessage m) {
+                  try {
+                      Map<String, String> d = m.getData();
+                      String kind = d.get("kind");
+                      // Notification normale (j'aime, message...) recue pendant que l'app est ouverte :
+                      // le site l'affiche deja, on ne fait RIEN (avant, cela declenchait un faux appel).
+                      if ("n".equals(kind)) {
+                          return;
+                      }
+                      // Azan : son d'Azan quand le telephone est verrouille
+                      if ("azan".equals(kind)) {
+                          mkAzan(d);
+                          return;
+                      }
+
+                      // ---- Appel entrant : comportement d'origine, inchange ----
+                      String title = d.get("title");
+                      if (title == null || title.isEmpty()) title = "Appel entrant";
+                      String body = d.get("body");
+                      if (body == null || body.isEmpty()) body = "Touchez pour répondre";
+
+                      NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                      Uri snd = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+
+                      if (Build.VERSION.SDK_INT >= 26) {
+                          NotificationChannel c = new NotificationChannel(CH, "Appels", NotificationManager.IMPORTANCE_HIGH);
+                          c.setSound(snd, new AudioAttributes.Builder()
+                                  .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                                  .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                  .build());
+                          c.enableVibration(true);
+                          c.setVibrationPattern(new long[] { 0, 600, 250, 600, 250, 600, 250, 600 });
+                          c.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                          nm.createNotificationChannel(c);
+                      }
+
+                      Intent i = new Intent(this, MainActivity.class);
+                      i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                      i.putExtra("mk_call", true);
+                      int fl = PendingIntent.FLAG_UPDATE_CURRENT;
+                      if (Build.VERSION.SDK_INT >= 23) fl |= PendingIntent.FLAG_IMMUTABLE;
+                      PendingIntent pi = PendingIntent.getActivity(this, 7, i, fl);
+
+                      NotificationCompat.Builder b = new NotificationCompat.Builder(this, CH)
+                              .setSmallIcon(R.drawable.ic_stat_moubarak)
+                              .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.notif_large))
+                              .setContentTitle(title)
+                              .setContentText(body)
+                              .setCategory(NotificationCompat.CATEGORY_CALL)
+                              .setPriority(NotificationCompat.PRIORITY_MAX)
+                              .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                              .setAutoCancel(true)
+                              .setTimeoutAfter(60000)
+                              .setSound(snd)
+                              .setVibrate(new long[] { 0, 600, 250, 600, 250, 600, 250, 600 })
+                              .setContentIntent(pi)
+                              .setFullScreenIntent(pi, true);
+                      nm.notify(7001, b.build());
+                  } catch (Exception e) {
+                      // on ne plante jamais pendant un appel
+                  }
+              }
+
+              // Notification d'Azan avec le son choisi (fichiers res/raw/azan_<voix>.mp3)
+              private void mkAzan(Map<String, String> d) {
+                  try {
+                      String title = d.get("title");
+                      if (title == null || title.isEmpty()) title = "Azan";
+                      String body = d.get("body");
+                      if (body == null || body.isEmpty()) body = "C'est l'heure de la prière";
+                      String voice = d.get("voice");
+                      if (voice == null || voice.isEmpty()) voice = "makkah";
+                      voice = voice.toLowerCase().replaceAll("[^a-z0-9]", "");
+
+                      int res = getResources().getIdentifier("azan_" + voice, "raw", getPackageName());
+                      if (res == 0) {
+                          voice = "makkah";
+                          res = getResources().getIdentifier("azan_makkah", "raw", getPackageName());
+                      }
+                      Uri snd = res != 0
+                              ? Uri.parse("android.resource://" + getPackageName() + "/raw/azan_" + voice)
+                              : RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                      String ch = "mk_azan_v1_" + voice;
+
+                      NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                      if (Build.VERSION.SDK_INT >= 26) {
+                          NotificationChannel c = new NotificationChannel(ch, "Azan", NotificationManager.IMPORTANCE_HIGH);
+                          c.setSound(snd, new AudioAttributes.Builder()
+                                  .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                                  .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                  .build());
+                          c.enableVibration(true);
+                          c.setVibrationPattern(new long[] { 0, 400, 200, 400 });
+                          c.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                          nm.createNotificationChannel(c);
+                      }
+
+                      Intent i = new Intent(this, MainActivity.class);
+                      i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                      int fl = PendingIntent.FLAG_UPDATE_CURRENT;
+                      if (Build.VERSION.SDK_INT >= 23) fl |= PendingIntent.FLAG_IMMUTABLE;
+                      PendingIntent pi = PendingIntent.getActivity(this, 8, i, fl);
+
+                      NotificationCompat.Builder b = new NotificationCompat.Builder(this, ch)
+                              .setSmallIcon(R.drawable.ic_stat_moubarak)
+                              .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.notif_large))
+                              .setContentTitle(title)
+                              .setContentText(body)
+                              .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                              .setPriority(NotificationCompat.PRIORITY_HIGH)
+                              .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                              .setAutoCancel(true)
+                              .setSound(snd)
+                              .setVibrate(new long[] { 0, 400, 200, 400 })
+                              .setContentIntent(pi);
+                      nm.notify(7100 + (int) (System.currentTimeMillis() % 1000), b.build());
+                  } catch (Exception e) {
+                      // jamais de plantage
+                  }
+              }
+          }
+          MKEOF
+          cat > $D/MainActivity.java <<'MKEOF'
+          package com.khelcom.moubarak;
+
+          import android.Manifest;
+          import android.app.NotificationManager;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.provider.Settings;
+
+          import androidx.core.app.ActivityCompat;
+          import androidx.core.content.ContextCompat;
+          import androidx.activity.OnBackPressedCallback;
+          import android.webkit.WebView;
+
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+            @Override
+            public void onCreate(Bundle savedInstanceState) {
+              registerPlugin(MoubarakStoragePlugin.class);
+              registerPlugin(MoubarakFcmPlugin.class);
+              registerPlugin(MoubarakPickerPlugin.class);
+              super.onCreate(savedInstanceState);
+              mkWake(getIntent());
+              mkAsk();
+              getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+                @Override
+                public void handleOnBackPressed() {
+                  try {
+                    final WebView w = getBridge().getWebView();
+                    if (w != null) {
+                      w.evaluateJavascript("(function(){try{return window.__mkBackNative?(window.__mkBackNative()?'1':'0'):'x'}catch(e){return 'x'}})()", new android.webkit.ValueCallback<String>() {
+                        @Override
+                        public void onReceiveValue(String v) {
+                          if ("\"1\"".equals(v)) {
+                            return;
+                          }
+                          if ("\"x\"".equals(v) && w.canGoBack()) {
+                            w.goBack();
+                            return;
+                          }
+                          moveTaskToBack(true);
+                        }
+                      });
+                      return;
+                    }
+                  } catch (Exception e) {
+                  }
+                  moveTaskToBack(true);
+                }
+              });
+            }
+
+            @Override
+            protected void onNewIntent(Intent intent) {
+              super.onNewIntent(intent);
+              mkWake(intent);
+            }
+
+            private void mkWake(Intent in) {
+              try {
+                if (in != null && in.getBooleanExtra("mk_call", false) && Build.VERSION.SDK_INT >= 27) {
+                  setShowWhenLocked(true);
+                  setTurnScreenOn(true);
+                }
+              } catch (Exception e) {
+              }
+            }
+
+            private void mkAsk() {
+              try {
+                if (Build.VERSION.SDK_INT >= 33
+                    && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                  ActivityCompat.requestPermissions(this, new String[] { Manifest.permission.POST_NOTIFICATIONS }, 71);
+                  return;
+                }
+                if (Build.VERSION.SDK_INT >= 34) {
+                  NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                  SharedPreferences sp = getSharedPreferences("mk", MODE_PRIVATE);
+                  if (!nm.canUseFullScreenIntent() && !sp.getBoolean("fsi", false)) {
+                    sp.edit().putBoolean("fsi", true).apply();
+                    Intent s = new Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:" + getPackageName()));
+                    startActivity(s);
+                  }
+                }
+              } catch (Exception e) {
+              }
+            }
+          }
+          MKEOF
+          M=android/app/src/main/AndroidManifest.xml
+          sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.microphone" android:required="false" />\n    <application#' $M
+          sed -i 's#</application>#    <service android:name="com.khelcom.moubarak.MoubarakFcmService" android:exported="false">\n            <intent-filter>\n                <action android:name="com.google.firebase.MESSAGING_EVENT" />\n            </intent-filter>\n        </service>\n    </application>#' $M
+          sed -i '0,/<\/activity>/s#</activity>#    <intent-filter>\n                <action android:name="android.intent.action.VIEW" />\n                <category android:name="android.intent.category.DEFAULT" />\n                <category android:name="android.intent.category.BROWSABLE" />\n                <data android:scheme="com.khelcom.moubarak" android:host="login-callback" />\n            </intent-filter>\n        </activity>#' $M
+          sed -i 's#<application#<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <application#' $M
+          echo "---- manifest ----"
+          cat $M
+
+      - name: Azan natif (sons)
+        run: |
+          R=android/app/src/main/res/raw
+          mkdir -p $R
+          for v in makkah madina aqsa alafasy hassan2 azhar touba; do
+            curl -fsSL "https://khm.khelcom-moubarak.workers.dev/adhan/$v.mp3" -o "$R/azan_$v.mp3" || rm -f "$R/azan_$v.mp3"
+          done
+          ls -la $R
+
+      - name: Logo M de l'application
+        run: |
+          curl -fsSL https://khm.khelcom-moubarak.workers.dev/icon-maskable-512.png -o /tmp/i.png || curl -fsSL https://khm.khelcom-moubarak.workers.dev/icon-512.png -o /tmp/i.png
+          pip install pillow
+          python3 - <<'PYEOF'
+          from PIL import Image, ImageDraw, ImageFont
+          import os
+          src=Image.open('/tmp/i.png').convert('RGBA')
+          col='#%02x%02x%02x'%src.getpixel((4,4))[:3]
+          R='android/app/src/main/res'
+          for d,l,f in [('mdpi',48,108),('hdpi',72,162),('xhdpi',96,216),('xxhdpi',144,324),('xxxhdpi',192,432)]:
+              p=os.path.join(R,'mipmap-'+d)
+              os.makedirs(p,exist_ok=True)
+              a=src.resize((l,l),Image.LANCZOS)
+              a.save(p+'/ic_launcher.png')
+              a.save(p+'/ic_launcher_round.png')
+              c=Image.new('RGBA',(f,f),(0,0,0,0))
+              k=int(f*0.78)
+              c.paste(src.resize((k,k),Image.LANCZOS),((f-k)//2,(f-k)//2))
+              c.save(p+'/ic_launcher_foreground.png')
+          v=os.path.join(R,'values')
+          os.makedirs(v,exist_ok=True)
+          open(v+'/ic_launcher_background.xml','w').write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n  <color name="ic_launcher_background">'+col+'</color>\n</resources>\n')
+          import glob
+          for sp in glob.glob(R+'/drawable*/splash.png'):
+              os.remove(sp)
+          S=4
+          def logo():
+              W=240*S; im=Image.new('RGBA',(W,W),(0,0,0,0)); d=ImageDraw.Draw(im)
+              c=W//2; D=180*S
+              d.ellipse([c-D*0.60,c-D*0.60,c+D*0.60,c+D*0.60],outline=(255,255,255,70),width=3*S)
+              d.ellipse([c-D/2,c-D/2,c+D/2,c+D/2],fill=(255,255,255,255))
+              g=tuple(int(col[i:i+2],16) for i in (1,3,5))+(255,)
+              hw,hh,mid,sw=D*0.25,D*0.225,D*0.04,D*0.10
+              pts=[(c-hw,c+hh),(c-hw,c-hh),(c,c+mid),(c+hw,c-hh),(c+hw,c+hh)]
+              d.line(pts,fill=g,width=int(sw),joint='curve')
+              for x,y in (pts[0],pts[-1],pts[1],pts[3]):
+                  d.ellipse([x-sw/2,y-sw/2,x+sw/2,y+sw/2],fill=g)
+              return im.resize((240,240),Image.LANCZOS)
+          def texte():
+              f=None
+              for q in ('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf','/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf'):
+                  if os.path.exists(q):
+                      f=ImageFont.truetype(q,36); break
+              if f is None:
+                  f=ImageFont.load_default(size=36)
+              t='MOUBARAK'; gap=20
+              ws=[f.getlength(ch) for ch in t]
+              W=int(sum(ws)+gap*(len(t)-1))+8; H=64
+              im=Image.new('RGBA',(W,H),(0,0,0,0)); d=ImageDraw.Draw(im); x=4
+              for ch,w in zip(t,ws):
+                  d.text((x,H//2),ch,font=f,fill=(255,255,255,240),anchor='lm'); x+=w+gap
+              return im
+          dx=R+'/drawable-xhdpi'
+          os.makedirs(dx,exist_ok=True)
+          logo().save(dx+'/splash_logo.png')
+          texte().save(dx+'/splash_text.png')
+          dd=R+'/drawable'
+          os.makedirs(dd,exist_ok=True)
+          open(dd+'/splash.xml','w').write('<?xml version="1.0" encoding="utf-8"?>\n<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n  <item android:drawable="@color/ic_launcher_background"/>\n  <item android:gravity="center"><bitmap android:gravity="center" android:src="@drawable/splash_logo"/></item>\n  <item android:gravity="bottom|center_horizontal" android:bottom="90dp"><bitmap android:gravity="center" android:src="@drawable/splash_text"/></item>\n</layer-list>\n')
+          st=R+'/values/styles.xml'
+          if os.path.exists(st):
+              t=open(st,encoding='utf-8').read()
+              a='<item name="android:background">@drawable/splash</item>'
+              if 'windowSplashScreenBackground' not in t and a in t:
+                  t=t.replace(a,a+'\n        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>')
+              z='<item name="android:background">@null</item>'
+              if 'android:windowBackground' not in t and z in t:
+                  t=t.replace(z,z+'\n        <item name="android:windowBackground">@drawable/splash</item>')
+              open(st,'w',encoding='utf-8').write(t)
+          def stat(sz):
+              K=8; W=sz*K; im=Image.new('RGBA',(W,W),(0,0,0,0)); d=ImageDraw.Draw(im)
+              d.ellipse([W*0.04,W*0.04,W*0.96,W*0.96],fill=(255,255,255,255))
+              c=W//2; hw,hh,mid,sw=W*0.20,W*0.18,W*0.03,W*0.09
+              pts=[(c-hw,c+hh),(c-hw,c-hh),(c,c+mid),(c+hw,c-hh),(c+hw,c+hh)]
+              m=Image.new('L',(W,W),0); md=ImageDraw.Draw(m)
+              md.line(pts,fill=255,width=int(sw),joint='curve')
+              for x,y in (pts[0],pts[-1],pts[1],pts[3]):
+                  md.ellipse([x-sw/2,y-sw/2,x+sw/2,y+sw/2],fill=255)
+              a=Image.composite(Image.new('L',(W,W),0),im.split()[3],m)
+              im.putalpha(a)
+              return im.resize((sz,sz),Image.LANCZOS)
+          for q,z in (('mdpi',24),('hdpi',36),('xhdpi',48),('xxhdpi',72),('xxxhdpi',96)):
+              os.makedirs(R+'/drawable-'+q,exist_ok=True)
+              stat(z).save(R+'/drawable-'+q+'/ic_stat_moubarak.png')
+          os.makedirs(R+'/drawable-nodpi',exist_ok=True)
+          Image.open('/tmp/i.png').convert('RGBA').resize((192,192),Image.LANCZOS).save(R+'/drawable-nodpi/notif_large.png')
+          print('demarrage avec logo M')
+          print('logo ok',col)
+          PYEOF
+
+      - name: Signature release et numero de version
+        env:
+          MK_KEYSTORE_B64: ${{ secrets.MK_KEYSTORE_B64 }}
+          MK_KEY_PASS: ${{ secrets.MK_KEY_PASS }}
+        run: |
+          if [ -z "$MK_KEYSTORE_B64" ] || [ -z "$MK_KEY_PASS" ]; then
+            echo "ERREUR : les secrets MK_KEYSTORE_B64 et MK_KEY_PASS sont absents. Impossible de signer le fichier Play Store."
+            exit 1
+          fi
+          echo "$MK_KEYSTORE_B64" | base64 -d > android/app/moubarak.keystore
+          cat >> android/app/build.gradle <<MKEOF
+
+          android {
+              signingConfigs {
+                  release {
+                      storeFile file("moubarak.keystore")
+                      storePassword "$MK_KEY_PASS"
+                      keyAlias "moubarak"
+                      keyPassword "$MK_KEY_PASS"
+                      storeType "pkcs12"
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                      debuggable false
+                  }
+              }
+          }
+          MKEOF
+          # Numero de version : doit augmenter a chaque envoi sur Google Play
+          sed -i -E "s/versionCode[ =]+[0-9]+/versionCode ${{ github.run_number }}/" android/app/build.gradle
+          sed -i -E "s/versionName[ =]+\"[^\"]*\"/versionName \"1.0.${{ github.run_number }}\"/" android/app/build.gradle
+          echo "---- version ----"
+          grep -n "versionCode\|versionName\|targetSdk\|compileSdk" android/app/build.gradle android/variables.gradle || true
+
+      - name: Fabriquer le fichier Play Store (AAB) et un APK de test
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew bundleRelease assembleRelease --no-daemon
+
+      - name: Publier l AAB et l APK de test
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: aab-${{ github.run_number }}
+          name: Moubarak AAB Play Store ${{ github.run_number }}
+          files: |
+            android/**/*.aab
+            android/**/*.apk
